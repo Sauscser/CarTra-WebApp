@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { generateClient } from 'aws-amplify/api';
 import { getUrl } from 'aws-amplify/storage';
 import { Ionicons } from '@expo/vector-icons';
 import { listLearnerDocumentResources } from '../../graphql/queries';
+import { getLearnerResourceUrl, isLearnerVideoResource } from '../../utils/learnerResourceUrl';
 
 type EvidenceKind = 'document' | 'video';
 
@@ -20,6 +21,7 @@ export default function SubjectEvidenceActions({ learnerId, subjectId, subjectNa
   const [loading, setLoading] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
 
   const showResources = async (nextKind: EvidenceKind) => {
     setKind(nextKind);
@@ -55,29 +57,64 @@ export default function SubjectEvidenceActions({ learnerId, subjectId, subjectNa
   };
 
   const openResource = async (resource: any) => {
+    setOpenError(null);
+    let webWindow: Window | null = null;
     try {
       setOpeningId(resource.id);
-      if (resource.externalUrl) {
-        await Linking.openURL(String(resource.externalUrl));
+      const externalUrl = getLearnerResourceUrl(resource.externalUrl, resource.fileKey);
+      if (externalUrl) {
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          webWindow = window.open(externalUrl.toString(), '_blank');
+          if (!webWindow) {
+            setOpenError('Your browser blocked the new tab. Allow pop-ups for CarTra and try again.');
+            return;
+          }
+          webWindow.opener = null;
+        } else {
+          await Linking.openURL(externalUrl.toString());
+        }
+        console.log('[SUBJECT_EVIDENCE_OPENED_EXTERNAL_LINK]', {
+          resourceId: resource.id,
+          source: resource.externalUrl ? 'externalUrl' : 'fileKey',
+        });
         return;
       }
-      if (!resource.fileKey) return;
-      const rawKey = String(resource.fileKey).trim();
+
+      if (resource.externalUrl) {
+        throw new Error('The saved link is not a valid HTTP or HTTPS URL.');
+      }
+      if (!resource.fileKey) {
+        throw new Error('This resource does not contain a link or file path.');
+      }
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        webWindow = window.open('about:blank', '_blank');
+        if (!webWindow) {
+          setOpenError('Your browser blocked the new tab. Allow pop-ups for CarTra and try again.');
+          return;
+        }
+      }
       const signedUrl = await getUrl({
-        path: rawKey,
+        path: String(resource.fileKey).trim(),
         options: { validateObjectExistence: true, expiresIn: 900 },
       });
-      await Linking.openURL(signedUrl.url.toString());
+      if (webWindow) webWindow.location.replace(signedUrl.url.toString());
+      else await Linking.openURL(signedUrl.url.toString());
     } catch (error) {
-      console.warn('[SUBJECT_EVIDENCE_OPEN_FAILED]', { resourceId: resource.id, error });
+      console.warn('[SUBJECT_EVIDENCE_OPEN_FAILED]', {
+        resourceId: resource.id,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+      webWindow?.close();
+      setOpenError(error instanceof Error ? error.message : 'Could not open this resource. Check your connection and access, then try again.');
     } finally {
       setOpeningId(null);
     }
   };
 
   const filteredResources = resources.filter((resource) => kind === 'video'
-    ? Boolean(resource.externalUrl) || resource.resourceType === 'video'
-    : !resource.externalUrl && resource.resourceType !== 'video');
+    ? isLearnerVideoResource(resource)
+    : !isLearnerVideoResource(resource));
 
   return (
     <>
@@ -97,6 +134,7 @@ export default function SubjectEvidenceActions({ learnerId, subjectId, subjectNa
           <View style={styles.modal}>
             <Text style={styles.title}>{kind === 'video' ? 'Subject videos' : 'Subject documents'}</Text>
             <Text style={styles.subjectName}>{subjectName}</Text>
+            {openError ? <Text style={styles.errorMessage}>{openError}</Text> : null}
             <ScrollView style={styles.list}>
               {loading ? <ActivityIndicator style={styles.loading} size="small" color="#1d4ed8" /> : null}
               {!loading && loadFailed ? <Text style={styles.message}>Could not load resources for this subject.</Text> : null}
@@ -133,6 +171,7 @@ const styles = StyleSheet.create({
   modal: { maxHeight: '82%', borderRadius: 12, backgroundColor: '#fff', padding: 14 },
   title: { color: '#111827', fontSize: 16, fontWeight: '800' },
   subjectName: { color: '#475569', fontSize: 13, marginTop: 3, marginBottom: 8 },
+  errorMessage: { color: '#b91c1c', fontSize: 12, marginBottom: 8 },
   list: { flexGrow: 0 },
   loading: { padding: 14 },
   message: { color: '#64748b', fontSize: 13, paddingVertical: 12 },

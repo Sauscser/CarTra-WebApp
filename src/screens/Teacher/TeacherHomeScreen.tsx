@@ -5,6 +5,7 @@ import {
   Alert,
   Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -24,6 +25,7 @@ import SubjectPerformanceGraph from '../../components/shared/SubjectPerformanceG
 import LearnerClusterPerformanceGraph from '../../components/shared/LearnerClusterPerformanceGraph';
 import calculateHistoricalClusterSeries, { calculateCourseClusterPoints, calculateCourseClusterScoreDetails, calculateDeviationPercentage, calculateTertiaryCourseClusterBenchmarkPoints, evaluateCourseSubjectPointRequirements, getCbeAchievementLevel, getCourseRequirementGroups, getMissingClusterGrades, hasCompleteCourseScoringData, hasCompleteCourseSubjectRequirements, hasCourseSubjectPointRequirements, parseCourseClusterRequirements } from '../../utils/cluster';
 import { parseLearnerSupportProfile, resolveLearnerCareerTarget } from '../../utils/learnerCareer';
+import { getLearnerResourceUrl, isLearnerVideoResource } from '../../utils/learnerResourceUrl';
 import { filterSupportSubjects } from '../../utils/supportSubjects';
 import { loadSupportSubjectIds } from '../../hooks/useSupportSubjectFilter';
 import {
@@ -34,10 +36,8 @@ import {
   createLearnerProfile,
   createAcademicRecord,
   createLearnerSubjectPerformance,
-  createLearnerSubjectPerformanceTarget,
   updateGrade12ResultSummary,
   updateLearnerSubjectPerformance,
-  updateLearnerSubjectPerformanceTarget,
   updateLearnerEnrollment,
   createUser,
   updateLearnerProfile,
@@ -245,6 +245,7 @@ export default function TeacherHomeScreen() {
   const [performanceLearner, setPerformanceLearner] = useState<LearnerRecord | null>(null);
   const [activeGraphLearnerId, setActiveGraphLearnerId] = useState<string | null>(null);
   const [performanceAction, setPerformanceAction] = useState<'menu' | 'viewMenu' | 'subject' | 'cluster' | 'rubric' | 'viewCluster' | 'viewSubjects' | 'viewGuidance' | 'viewEPortfolio' | null>(null);
+  const [pendingLearnerConfirmation, setPendingLearnerConfirmation] = useState<{ learner: LearnerRecord; action: 'view' | 'update' } | null>(null);
   const [performanceSessionId, setPerformanceSessionId] = useState(0);
   const [selectedPerformanceSubject, setSelectedPerformanceSubject] = useState<{ id: string; name: string; code?: string; category?: string | null; targetMarks?: number | null; marksScored?: number | null } | null>(null);
   const [performanceMarksInput, setPerformanceMarksInput] = useState('');
@@ -842,10 +843,17 @@ export default function TeacherHomeScreen() {
         ...current,
         [learnerId]: items,
       }));
-      console.log('[EPORTFOLIO_DEBUG] loadLearnerDocuments:success', JSON.stringify({ learnerId, loadedItems: items.length }));
+      console.log('[EPORTFOLIO_DEBUG] loadLearnerDocuments:success', {
+        learnerId,
+        loadedItems: items.length,
+        documentCount: items.filter((item) => !item.externalUrl && item.resourceType !== 'video').length,
+        videoCount: items.filter(isLearnerVideoResource).length,
+        subjectIds: [...new Set(items.map((item) => item.relatedSubjectId).filter(Boolean))],
+      });
       setDocumentDebugMessage(`Loaded ${items.length} e-portfolio file(s) for learner.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not load learner e-portfolio files.';
+      console.error('[EPORTFOLIO_DEBUG] loadLearnerDocuments:failed', { learnerId, message, error });
       setNotice(message);
       setDocumentDebugMessage(`Load failed: ${message}`);
       logAwsError('loadLearnerDocuments', error, { learnerId, selectedClassCode });
@@ -1046,18 +1054,17 @@ export default function TeacherHomeScreen() {
     setVideoLinkModalVisible(true);
   };
 
-  const saveYouTubeLink = async () => {
+  const saveVideoLink = async () => {
     if (!teacherContext || !performanceLearner || !videoLinkSubject) return;
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(videoLinkInput.trim());
     } catch {
-      Alert.alert('Invalid YouTube link', 'Enter a valid YouTube video URL.');
+      setNotice('Enter a valid video URL starting with https://.');
       return;
     }
-    const host = parsedUrl.hostname.toLowerCase().replace(/^www\./, '');
-    if (parsedUrl.protocol !== 'https:' || !['youtube.com', 'm.youtube.com', 'youtu.be'].includes(host)) {
-      Alert.alert('Invalid YouTube link', 'Use an HTTPS link from youtube.com or youtu.be.');
+    if (!['https:', 'http:'].includes(parsedUrl.protocol)) {
+      setNotice('Video links must use http:// or https://.');
       return;
     }
 
@@ -1110,24 +1117,60 @@ export default function TeacherHomeScreen() {
         }));
       }
       setVideoLinkModalVisible(false);
-      setNotice(`YouTube link saved under ${videoLinkSubject.name}.`);
+      setNotice(`Video link saved under ${videoLinkSubject.name}.`);
     } catch (error) {
       const graphqlError = error as { errors?: Array<{ message?: string }>; message?: string } | undefined;
-      Alert.alert('Could not save video', graphqlError?.errors?.[0]?.message || graphqlError?.message || 'Could not save this YouTube link.');
+      const message = graphqlError?.errors?.[0]?.message || graphqlError?.message || 'Could not save this video link.';
+      console.error('[EPORTFOLIO_DEBUG] save-video-link:failed', {
+        learnerId: performanceLearner.id,
+        subjectId: videoLinkSubject.id,
+        message,
+      });
+      setNotice(message);
     } finally {
       setSavingVideoLink(false);
     }
   };
 
   const openLearnerDocument = async (resource: LearnerDocumentResourceRecord) => {
+    const externalUrl = getLearnerResourceUrl(resource.externalUrl, resource.fileKey);
+    const storedUrl = externalUrl?.toString() || resource.fileKey;
+    console.log('[EPORTFOLIO_DEBUG] open:pressed', {
+      resourceId: resource.id,
+      linkSource: externalUrl ? (resource.externalUrl ? 'externalUrl' : 'fileKey') : null,
+      hasFileKey: Boolean(resource.fileKey),
+      platform: Platform.OS,
+    });
+    let openStage = 'prepare';
+    let webWindow: Window | null = null;
     try {
       setOpeningDocumentId(resource.id);
-      if (resource.externalUrl) {
-        await Linking.openURL(resource.externalUrl);
+      if (externalUrl) {
+        openStage = 'open-external-url';
+        const url = externalUrl;
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          const openedWindow = window.open(url.toString(), '_blank');
+          if (!openedWindow) {
+            setNotice('Your browser blocked the new tab. Allow pop-ups for CarTra and try again.');
+            return;
+          }
+          openedWindow.opener = null;
+        } else {
+          await Linking.openURL(url.toString());
+        }
+        console.log('[EPORTFOLIO_DEBUG] open:external-url', { resourceId: resource.id });
         return;
       }
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        webWindow = window.open('about:blank', '_blank');
+        if (!webWindow) {
+          setNotice('Your browser blocked the new tab. Allow pop-ups for CarTra and try again.');
+          return;
+        }
+      }
       if (!resource.fileKey) throw new Error('This resource has no document file attached.');
-      console.log('[EPORTFOLIO_DEBUG] open:start', JSON.stringify({ id: resource.id, fileKey: resource.fileKey }));
+      openStage = 'get-signed-url';
+      console.log('[EPORTFOLIO_DEBUG] open:get-url:start', { resourceId: resource.id });
       const signed = await getUrl({
         path: resource.fileKey,
         options: {
@@ -1136,12 +1179,22 @@ export default function TeacherHomeScreen() {
         },
       });
 
-      await Linking.openURL(signed.url.toString());
-      console.log('[EPORTFOLIO_DEBUG] open:success', JSON.stringify({ id: resource.id }));
+      console.log('[EPORTFOLIO_DEBUG] open:get-url:success', { resourceId: resource.id });
+      openStage = 'navigate-to-resource';
+      if (webWindow) webWindow.location.replace(signed.url.toString());
+      else await Linking.openURL(signed.url.toString());
+      console.log('[EPORTFOLIO_DEBUG] open:success', { resourceId: resource.id });
     } catch (error) {
+      webWindow?.close();
       const message = error instanceof Error ? error.message : 'Could not open the selected document.';
-      setNotice(message);
-      logAwsError('openLearnerDocument', error, { resourceId: resource.id, fileKey: resource.fileKey });
+      const safeMessage = message.replace(/https?:\/\/[^\s'"]+/gi, '[URL redacted]');
+      console.error('[EPORTFOLIO_DEBUG] open:failed', {
+        resourceId: resource.id,
+        stage: openStage,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        message: safeMessage,
+      });
+      setNotice(safeMessage);
     } finally {
       setOpeningDocumentId('');
     }
@@ -2000,9 +2053,7 @@ export default function TeacherHomeScreen() {
       const mutationName = existingFact ? 'update' : 'create';
       try {
         mutationResult = await client.graphql({
-          query: options.includeAchievedMark === false
-            ? existingFact ? updateLearnerSubjectPerformanceTarget : createLearnerSubjectPerformanceTarget
-            : existingFact ? updateLearnerSubjectPerformance : createLearnerSubjectPerformance,
+          query: existingFact ? updateLearnerSubjectPerformance : createLearnerSubjectPerformance,
           variables: { input: factInput },
         } as any);
       } catch (error) {
@@ -2326,7 +2377,38 @@ export default function TeacherHomeScreen() {
     return series;
   };
 
+  const beginPerformanceAction = (learner: LearnerRecord, action: 'view' | 'update') => {
+    const title = action === 'view' ? 'View learner performance' : 'Update learner performance';
+    console.log('[TEACHER_ACTION_DEBUG]', {
+      event: 'performance action confirmed',
+      action,
+      learnerId: learner.id,
+      learnerName: learner.fullName,
+      platform: Platform.OS,
+    });
+    setPendingLearnerConfirmation(null);
+    setPerformanceSessionId((current) => current + 1);
+    setPerformanceAction(null);
+    setPerformanceLearner(null);
+    setActiveGraphLearnerId(learner.id);
+    setSelectedPerformanceSubject(null);
+    setPerformanceMarksInput('');
+    setLearnerDocumentMap({});
+    setLearnerGuidanceMap({});
+    setPerformanceLearner(learner);
+    setPerformanceAction(action === 'view' ? 'viewMenu' : 'menu');
+    setNotice(`${title} for ${learner.fullName} is ready to ${action === 'view' ? 'view' : 'update'}.`);
+  };
+
   const promptLearnerAction = (learner: LearnerRecord, action: 'view' | 'update' | 'addSubject' | 'promote' | 'updateCareerTarget') => {
+    console.log('[TEACHER_ACTION_DEBUG]', {
+      event: 'learner action pressed',
+      action,
+      learnerId: learner.id,
+      learnerName: learner.fullName,
+      grade: learner.gradeLevel,
+      platform: Platform.OS,
+    });
     if (action === 'promote') {
       const currentGrade = Number(String(learner.gradeLevel || '').replace(/\D/g, '')) || 7;
       setPromotionLearner(learner);
@@ -2383,59 +2465,22 @@ export default function TeacherHomeScreen() {
       return;
     }
 
-    if (action === 'view') {
-      console.log('[DEBUG_TEACHER_SELECTION]', JSON.stringify({
-        event: 'view learner performance click',
-        learnerId: learner.id,
-        learnerName: learner.fullName,
-        grade: learner.gradeLevel,
-      }, null, 2));
-      Alert.alert(config.title, config.message, [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: config.confirmText,
-          onPress: () => {
-            setPerformanceSessionId((current) => current + 1);
-            setPerformanceAction(null);
-            setPerformanceLearner(null);
-            setActiveGraphLearnerId(learner.id);
-            setSelectedPerformanceSubject(null);
-            setPerformanceMarksInput('');
-            setLearnerDocumentMap({});
-            setLearnerGuidanceMap({});
-            setPerformanceLearner(learner);
-            setPerformanceAction('viewMenu');
-            setNotice(`${config.title} for ${learner.fullName} is ready to view.`);
-          },
-        },
-      ]);
-      return;
-    }
+    if (action === 'view' || action === 'update') {
+      if (Platform.OS === 'web') {
+        setPendingLearnerConfirmation({ learner, action });
+        return;
+      }
 
-    if (action === 'update') {
-      console.log('[DEBUG_TEACHER_SELECTION]', JSON.stringify({
-        event: 'update learner performance click',
-        learnerId: learner.id,
-        learnerName: learner.fullName,
-        grade: learner.gradeLevel,
-      }, null, 2));
-      Alert.alert(config.title, config.message, [
+      const title = action === 'view' ? 'View learner performance' : 'Update learner performance';
+      const message = action === 'view'
+        ? `This opens the learner performance view for ${learner.fullName}.`
+        : `This opens the performance update flow for ${learner.fullName}.`;
+      const confirmText = action === 'view' ? 'Open' : 'Proceed';
+      Alert.alert(title, message, [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: config.confirmText,
-          onPress: () => {
-            setPerformanceSessionId((current) => current + 1);
-            setPerformanceAction(null);
-            setPerformanceLearner(null);
-            setActiveGraphLearnerId(learner.id);
-            setSelectedPerformanceSubject(null);
-            setPerformanceMarksInput('');
-            setLearnerDocumentMap({});
-            setLearnerGuidanceMap({});
-            setPerformanceLearner(learner);
-            setPerformanceAction('menu');
-            setNotice(`${config.title} for ${learner.fullName} is ready to update.`);
-          },
+          text: confirmText,
+          onPress: () => beginPerformanceAction(learner, action),
         },
       ]);
       return;
@@ -2973,6 +3018,48 @@ export default function TeacherHomeScreen() {
         )}
       </SectionCard>
 
+      <Modal
+        transparent
+        visible={pendingLearnerConfirmation !== null}
+        animationType="fade"
+        onRequestClose={() => setPendingLearnerConfirmation(null)}
+      >
+        <View style={styles.dialogBackdrop}>
+          <View style={styles.dialogCard}>
+            <Text style={styles.dialogTitle}>
+              {pendingLearnerConfirmation?.action === 'view' ? 'View learner performance' : 'Update learner performance'}
+            </Text>
+            <Text style={styles.dialogText}>
+              {pendingLearnerConfirmation
+                ? pendingLearnerConfirmation.action === 'view'
+                  ? `This opens the learner performance view for ${pendingLearnerConfirmation.learner.fullName}.`
+                  : `This opens the performance update flow for ${pendingLearnerConfirmation.learner.fullName}.`
+                : ''}
+            </Text>
+            <View style={styles.dialogActions}>
+              <TouchableOpacity
+                style={styles.secondaryButton}
+                onPress={() => setPendingLearnerConfirmation(null)}
+              >
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.primaryButton}
+                onPress={() => {
+                  if (pendingLearnerConfirmation) {
+                    beginPerformanceAction(pendingLearnerConfirmation.learner, pendingLearnerConfirmation.action);
+                  }
+                }}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {pendingLearnerConfirmation?.action === 'view' ? 'Open' : 'Proceed'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal transparent visible={promotionModalVisible} animationType="fade" onRequestClose={() => {
         setPromotionModalVisible(false);
         setPromotionLearner(null);
@@ -3483,7 +3570,7 @@ export default function TeacherHomeScreen() {
                                     style={styles.subjectEvidenceButton}
                                     onPress={() => openVideoLinkForm({ id: subject.id, name: subject.name })}
                                     accessibilityRole="button"
-                                    accessibilityLabel={`Add YouTube video for ${subject.name}`}
+                                    accessibilityLabel={`Add video link for ${subject.name}`}
                                   >
                                     <Ionicons name="videocam-outline" size={19} color="#b91c1c" />
                                     <Text style={styles.subjectEvidenceButtonText}>Video</Text>
@@ -3614,7 +3701,7 @@ export default function TeacherHomeScreen() {
                               <View style={styles.linkedDocumentHeader}>
                                 <View style={styles.linkedDocumentTextBlock}>
                                   <Text style={styles.linkedDocumentTitle}>{resource.title}</Text>
-                                  <Text style={styles.linkedDocumentMeta}>{resource.externalUrl ? 'YouTube video' : 'E-portfolio document'} • {resource.status}</Text>
+                                  <Text style={styles.linkedDocumentMeta}>{isLearnerVideoResource(resource) ? 'Video link' : 'E-portfolio document'} • {resource.status}</Text>
                                   <Text style={styles.linkedDocumentMeta}>{resource.relatedSubjectName || 'Unassigned subject'}</Text>
                                 </View>
                                 <TouchableOpacity
@@ -3701,13 +3788,26 @@ export default function TeacherHomeScreen() {
                             );
                             const subjectId = subject.id || learnerSubject?.id || '';
                             const subjectResources = (learnerDocumentMap[learner.id] || []).filter((resource) => resource.relatedSubjectId === subjectId);
-                            const documentCount = subjectResources.filter((resource) => !resource.externalUrl && resource.resourceType !== 'video').length;
-                            const videoCount = subjectResources.filter((resource) => Boolean(resource.externalUrl) || resource.resourceType === 'video').length;
+                            const documentCount = subjectResources.filter((resource) => !isLearnerVideoResource(resource)).length;
+                            const videoCount = subjectResources.filter(isLearnerVideoResource).length;
+                            const openSubjectResources = (kind: 'document' | 'video') => {
+                              console.log('[EPORTFOLIO_DEBUG] subject-resource-button:pressed', {
+                                kind,
+                                learnerId: learner.id,
+                                subjectId,
+                                subjectName: subject.label,
+                                loadedResourceCount: subjectResources.length,
+                                documentCount,
+                                videoCount,
+                                platform: Platform.OS,
+                              });
+                              setEvidenceViewer({ subjectId, subjectName: subject.label, kind });
+                            };
                             return (
                                 <View style={styles.subjectEvidenceActions}>
                                   <TouchableOpacity
                                     style={styles.subjectEvidenceButton}
-                                    onPress={() => setEvidenceViewer({ subjectId, subjectName: subject.label, kind: 'document' })}
+                                    onPress={() => openSubjectResources('document')}
                                     disabled={!subjectId}
                                     accessibilityRole="button"
                                     accessibilityLabel={`View ${documentCount} documents for ${subject.label}`}
@@ -3717,7 +3817,7 @@ export default function TeacherHomeScreen() {
                                   </TouchableOpacity>
                                   <TouchableOpacity
                                     style={styles.subjectEvidenceButton}
-                                    onPress={() => setEvidenceViewer({ subjectId, subjectName: subject.label, kind: 'video' })}
+                                    onPress={() => openSubjectResources('video')}
                                     disabled={!subjectId}
                                     accessibilityRole="button"
                                     accessibilityLabel={`View ${videoCount} videos for ${subject.label}`}
@@ -3743,8 +3843,8 @@ export default function TeacherHomeScreen() {
               >
                 <View style={styles.dialogBackdrop}>
                   <View style={styles.dialogCard}>
-                    <Text style={styles.dialogTitle}>Add subject video</Text>
-                    <Text style={styles.dialogText}>Save a YouTube video link under {videoLinkSubject?.name || 'this subject'}.</Text>
+                    <Text style={styles.dialogTitle}>Add subject video link</Text>
+                    <Text style={styles.dialogText}>Paste a video link from YouTube or another video site under {videoLinkSubject?.name || 'this subject'}.</Text>
                     <Text style={styles.detailLabel}>Video title</Text>
                     <TextInput
                       style={styles.subjectPerformanceInput}
@@ -3753,7 +3853,7 @@ export default function TeacherHomeScreen() {
                       placeholder="Video title"
                       placeholderTextColor="#444"
                     />
-                    <Text style={styles.detailLabel}>YouTube URL</Text>
+                    <Text style={styles.detailLabel}>Video URL</Text>
                     <TextInput
                       style={styles.subjectPerformanceInput}
                       value={videoLinkInput}
@@ -3768,7 +3868,7 @@ export default function TeacherHomeScreen() {
                       <TouchableOpacity style={styles.secondaryButton} onPress={() => setVideoLinkModalVisible(false)}>
                         <Text style={styles.secondaryButtonText}>Cancel</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity style={[styles.primaryButton, savingVideoLink && styles.primaryButtonDisabled]} onPress={() => void saveYouTubeLink()} disabled={savingVideoLink}>
+                      <TouchableOpacity style={[styles.primaryButton, savingVideoLink && styles.primaryButtonDisabled]} onPress={() => void saveVideoLink()} disabled={savingVideoLink}>
                         <View style={styles.buttonContentRow}>
                           {savingVideoLink ? <ActivityIndicator size="small" color="#ffffff" /> : null}
                           <Text style={styles.primaryButtonText}>{savingVideoLink ? 'Saving...' : 'Save video'}</Text>
@@ -3793,7 +3893,7 @@ export default function TeacherHomeScreen() {
                       {(() => {
                         const resources = (learnerDocumentMap[learner.id] || [])
                           .filter((resource) => resource.relatedSubjectId === evidenceViewer?.subjectId)
-                          .filter((resource) => evidenceViewer?.kind === 'video' ? Boolean(resource.externalUrl) || resource.resourceType === 'video' : !resource.externalUrl && resource.resourceType !== 'video');
+                          .filter((resource) => evidenceViewer?.kind === 'video' ? isLearnerVideoResource(resource) : !isLearnerVideoResource(resource));
                         if (resources.length === 0) {
                           return <Text style={styles.empty}>No {evidenceViewer?.kind === 'video' ? 'videos' : 'documents'} are linked to this subject yet.</Text>;
                         }

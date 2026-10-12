@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Modal, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { generateClient } from 'aws-amplify/api';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import { getUrl } from 'aws-amplify/storage';
@@ -967,9 +967,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#f3f4f6',
   },
   content: {
-    padding: 20,
-    gap: 16,
+    padding: Platform.OS === 'web' ? 32 : 20,
+    gap: Platform.OS === 'web' ? 22 : 16,
     paddingBottom: 36,
+    width: Platform.OS === 'web' ? '100%' : undefined,
+    maxWidth: Platform.OS === 'web' ? 1680 : undefined,
+    alignSelf: Platform.OS === 'web' ? 'center' : undefined,
   },
   loadingState: {
     flexDirection: 'row',

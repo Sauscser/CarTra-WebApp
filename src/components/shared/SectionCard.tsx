@@ -1,5 +1,5 @@
 import React, { PropsWithChildren, useEffect, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View, ScrollView } from 'react-native';
+import { Platform, StyleSheet, Text, TouchableOpacity, View, ScrollView } from 'react-native';
 
 type SectionCardProps = PropsWithChildren<{
   title?: string;
@@ -7,9 +7,10 @@ type SectionCardProps = PropsWithChildren<{
   defaultExpanded?: boolean;
   expanded?: boolean;
   onToggle?: (expanded: boolean) => void;
+  fillAvailableHeight?: boolean;
 }>;
 
-export default function SectionCard({ title, subtitle, children, defaultExpanded = true, expanded, onToggle }: SectionCardProps) {
+export default function SectionCard({ title, subtitle, children, defaultExpanded = true, expanded, onToggle, fillAvailableHeight = false }: SectionCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(defaultExpanded);
   const isExpanded = expanded !== undefined ? expanded : internalExpanded;
 
@@ -28,7 +29,7 @@ export default function SectionCard({ title, subtitle, children, defaultExpanded
   };
 
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, fillAvailableHeight && styles.fillCard]}>
       <TouchableOpacity activeOpacity={0.8} onPress={handleToggle} style={styles.header}>
         <View style={styles.headerText}>
           {title ? <Text style={styles.title}>{title}</Text> : null}
@@ -37,7 +38,11 @@ export default function SectionCard({ title, subtitle, children, defaultExpanded
         <Text style={styles.toggleText}>{isExpanded ? '−' : '+'}</Text>
       </TouchableOpacity>
       {isExpanded ? (
-        <ScrollView nestedScrollEnabled contentContainerStyle={styles.contentScroll}>
+        <ScrollView
+          nestedScrollEnabled
+          style={fillAvailableHeight && styles.fillContent}
+          contentContainerStyle={[styles.contentScroll, fillAvailableHeight && styles.fillContentContainer]}
+        >
           {children}
         </ScrollView>
       ) : null}
@@ -49,7 +54,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#ffffff',
     borderRadius: 18,
-    padding: 24,
+    padding: Platform.OS === 'web' ? 28 : 24,
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowRadius: 14,
@@ -85,5 +90,15 @@ const styles = StyleSheet.create({
   },
   contentScroll: {
     paddingBottom: 8,
+  },
+  fillCard: {
+    flex: 1,
+    minHeight: 0,
+  },
+  fillContent: {
+    flex: 1,
+  },
+  fillContentContainer: {
+    flexGrow: 1,
   },
 });

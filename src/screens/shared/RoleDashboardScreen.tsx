@@ -7,16 +7,15 @@ type RoleDashboardScreenProps = {
   title: string;
   subtitle: string;
   children?: React.ReactNode;
+  fillAvailableHeight?: boolean;
 };
 
-export default function RoleDashboardScreen({ title, subtitle }: RoleDashboardScreenProps) {
+export default function RoleDashboardScreen({ title, subtitle, children, fillAvailableHeight = false }: RoleDashboardScreenProps) {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
-      <SectionCard title={title} subtitle={subtitle}>
-        {/* Render children if provided (e.g., ParentProfileScreen), otherwise show placeholder */}
-        {/** @ts-ignore children may be undefined */}
-        {(arguments[0] as any).children ? (arguments[0] as any).children : <Text style={styles.placeholder}>Dashboard features for this role are the next build step.</Text>}
+      <SectionCard title={title} subtitle={subtitle} fillAvailableHeight={fillAvailableHeight}>
+        {children || <Text style={styles.placeholder}>Dashboard features for this role are the next build step.</Text>}
       </SectionCard>
     </SafeAreaView>
   );

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { generateClient } from 'aws-amplify/api';
 import useSessionUser from '../../hooks/useSessionUser';
 import ParentCreateForm from './ParentCreateForm';
@@ -44,7 +44,7 @@ export default function ParentProfileScreen() {
   }, [navigation]);
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <View style={styles.container}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginVertical: 12 }}>
         <TouchableOpacity
           style={[styles.toggleBtn, mode === 'view' ? styles.toggleBtnPrimary : styles.toggleBtnSecondary]}
@@ -73,12 +73,12 @@ export default function ParentProfileScreen() {
       {mode === 'view' && (
         <ParentLinkedLearners key={String(isFocused)} parentProfileId={parentProfileId} parentNationalId={parentNationalId} parentTabFocused={isFocused} />
       )}
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 12 },
+  container: { padding: 12, flexShrink: 0 },
   label: { fontWeight: '700', marginTop: 12 },
   input: { borderWidth: 1, borderColor: '#ddd', padding: 8, borderRadius: 8, marginTop: 6 },
   saveButton: { marginTop: 12, backgroundColor: '#1d4ed8', padding: 12, borderRadius: 10 },

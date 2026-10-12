@@ -1,6 +1,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import { Platform, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ParentHomeScreen from '../screens/Parent/ParentHomeScreen';
 import TeacherHomeScreen from '../screens/Teacher/TeacherHomeScreen';
@@ -15,6 +16,8 @@ type HomeTabsNavigatorProps = {
 
 export default function HomeTabsNavigator({ tabRoutes }: HomeTabsNavigatorProps) {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const desktopWeb = Platform.OS === 'web' && width >= 1024;
   const defaultHomeTab = tabRoutes.includes('School') ? 'School' : tabRoutes[0] ?? 'School';
 
   const tabIcon = (routeName: TabRouteName, focused: boolean) => {
@@ -37,6 +40,7 @@ export default function HomeTabsNavigator({ tabRoutes }: HomeTabsNavigatorProps)
       initialRouteName={defaultHomeTab}
       screenOptions={{
         headerShown: false,
+        tabBarPosition: desktopWeb ? 'top' : 'bottom',
         tabBarActiveTintColor: '#1d4ed8',
         tabBarInactiveTintColor: '#6b7280',
         tabBarLabelStyle: {
@@ -50,10 +54,11 @@ export default function HomeTabsNavigator({ tabRoutes }: HomeTabsNavigatorProps)
         },
         tabBarStyle: {
           backgroundColor: '#ffffff',
-          borderTopColor: '#e5e7eb',
-          height: 68 + insets.bottom,
-          paddingBottom: Math.max(insets.bottom, 10),
-          paddingTop: 8,
+          borderTopColor: desktopWeb ? 'transparent' : '#e5e7eb',
+          borderBottomColor: desktopWeb ? '#e5e7eb' : 'transparent',
+          height: desktopWeb ? 54 : 68 + insets.bottom,
+          paddingBottom: desktopWeb ? 6 : Math.max(insets.bottom, 10),
+          paddingTop: desktopWeb ? 6 : 8,
           paddingHorizontal: 8,
         },
       }}

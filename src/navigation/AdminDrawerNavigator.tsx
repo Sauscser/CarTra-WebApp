@@ -1,5 +1,6 @@
 import React from 'react';
 import { createDrawerNavigator } from '@react-navigation/drawer';
+import { Platform, useWindowDimensions } from 'react-native';
 import HomeTabsNavigator from './HomeTabsNavigator';
 import NationalOfficeScreen from '../screens/National';
 import RegionalHomeScreen from '../screens/Regional/RegionalHomeScreen';
@@ -26,14 +27,20 @@ export default function AdminDrawerNavigator({
   drawerRoutes,
   tabRoutes,
 }: AdminDrawerNavigatorProps) {
+  const { width } = useWindowDimensions();
+  const desktopWeb = Platform.OS === 'web' && width >= 1024;
+
   return (
     <Drawer.Navigator
       initialRouteName="Home"
       screenOptions={{
+        drawerType: desktopWeb ? 'permanent' : 'front',
+        drawerStyle: desktopWeb ? { width: 264, backgroundColor: '#f8fafc' } : undefined,
         headerTintColor: '#111827',
         headerStyle: { backgroundColor: '#f8fafc' },
         drawerActiveTintColor: '#1d4ed8',
         drawerInactiveTintColor: '#374151',
+        sceneStyle: { backgroundColor: '#f3f4f6' },
       }}
     >
       <Drawer.Screen name="Home" options={{ title: 'Home' }}>
